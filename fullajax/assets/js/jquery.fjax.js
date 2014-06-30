@@ -9,6 +9,7 @@
     var jsCache;
     var lastActiveLink;
     var request;
+    var afterClose;
     var Fjax = function (options) {
         if (window.history && history.pushState) {
             lastActiveLink = $("a[href='" + options.currentUrl + "']");
@@ -32,11 +33,21 @@
         },
         listen: function () {
             var self = this;
-
             self.$win.on("popstate", function() {
+                var event = {return: false};
+                self.trigger('fjax.popstate',[event]);
+                if(event.return) {
+                    return false;
+                }
                 self.loadPage(location.href);
             });
             self.$doc.on("click", self.options.linkSelector, function() {
+                var event = {return: false};
+                self.trigger('fjax.linkClick',[event]);
+                if(event.return) {
+                    return false;
+                }
+
                 if(request){
                     request.abort();
                 }
@@ -46,22 +57,39 @@
                 history.pushState(null, null,href);
 
                 lastActiveLink.removeClass('active').parent('.active').removeClass('active');
-                lastActiveLink = link;
+                lastActiveLink = $("a[href='" + href + "']");
                 lastActiveLink.addClass('active').parent('li').addClass('active');
 
-                if(self.loadCachePage(href)){
-                    self.trigger('fjax.analytics',[href]);
-                    return false;
-                }
                 self.loadPage(href);
                 return false;
             })
+
+            if (!self.options.eventsList['fjax.changePage']){
+                self.$doc.on('fjax.changePage', function($event,$newContainer,$oldContainer,data,self) {
+                    if ($oldContainer){
+                        $oldContainer.remove();
+                    }
+                    $newContainer.show();
+                });
+            }
+            if (!self.options.eventsList['fjax.changeCachePage']){
+                self.$doc.on('fjax.changeCachePage', function($event,$newContainer,$oldContainer,data,self) {
+                    $oldContainer.hide();
+                    $newContainer.show();
+                });
+            }
         },
         loadPage:function(url){
             var self = this,
-                $container = $('.'+self.options.contentClass),
+                $oldContainer = $('.'+self.options.contentClass),
                 $newContainer,
                 links = [];
+            if(self.loadCachePage(url)){
+                self.trigger('fjax.analytics',[url]);
+                return false;
+            }
+
+
             self.trigger('fjax.loading',[true]);
             $('.cachePage:visible').removeAttr('id').hide();
 
@@ -81,28 +109,30 @@
                         location.href = data.redirect;
                         return true;
                     }
-
                     self.appendCss(data,url);
-
-
                     if(data.title){
                         $('title').text(data.title);
                     }
 
+                    $newContainer = $oldContainer.clone(true).hide().html(data.content);
+                    $oldContainer.hide().removeAttr('id');
+                    $oldContainer.after($newContainer);
+                    $newContainer.attr('id',self.options.contentId);
                     if(data.cache){
-                        $newContainer = $container.clone(true);
-                        $('#'+self.options.contentId).hide().removeAttr('id');
-                        $newContainer.addClass('cachePage').removeClass(self.options.contentClass).attr({
-                            'data-cache': url,
-                            'data-title': data.title,
-                            'id': self.options.contentId
-                        });
-                        $container.after($newContainer);
-                        $container = $newContainer;
-                    }else{
-                        $('#' + self.options.contentId).hide().removeAttr('id');
-                        $container.attr('id',self.options.contentId);
+                        $newContainer.addClass('cachePage')
+                            .removeClass(self.options.contentClass)
+                            .attr('data-cache', url);
                     }
+
+                    if($.isFunction(afterClose)){
+                        if(afterClose($oldContainer,self) === false){
+                            afterClose = false;
+                            return true;
+                        }
+                        afterClose = false;
+                    }
+
+
 
                     if(data.scripts){
                         for (var i in data.scripts.links) {
@@ -121,10 +151,10 @@
 
                     if(links.length){
                         getScripts(links,function(){
-                            self.appendContent($container,data);
+                            self.appendContent($newContainer,$oldContainer,data);
                         });
                     }else{
-                        self.appendContent($container,data);
+                        self.appendContent($newContainer,$oldContainer,data);
                     }
                     self.trigger('fjax.analytics',[url]);
                 },
@@ -139,42 +169,62 @@
         trigger: function(event,params){
             this.$doc.trigger(event,params || []);
         },
-        appendContent:function($container,data){
-            var self = this;
-            if(data.content){
-                $container.html(data.content).show();
+        appendContent:function($newContainer,$oldContainer,data){
+            var self = this,
+                o = {initFunc: false, readyFunc: false, data: data};
+
+            if(data.cache){
+                $oldContainer = false;
             }
+            self.trigger('fjax.changePage',[$newContainer,$oldContainer,data,self]);
             self.trigger('fjax.loading',[false]);
+
             if(data.scripts){
-                var o = {initFunc:false,readyFunc:false};
                 if(data.scripts.init){
-                    o.initFunc = eval("("+d.scripts.init+")");
+                    o.initFunc = eval("(function(){" + data.scripts.init + "})");
                     o.initFunc();
                 }
                 if(data.scripts.ready){
-                    o.readyFunc = eval("("+d.scripts.ready+")");
+                    o.readyFunc = eval("(function(){" + data.scripts.ready + "})");
                     o.readyFunc();
                 }
-                if(data.cache){
-                    $container.data('fjax',o);
+                if(data.scripts.afterClose){
+                    afterClose = o.afterCloseFunc = eval("(function(){" + data.scripts.afterClose + "})");
                 }
-
             }
+            $newContainer.data('fjax',o);
+
         },
         loadCachePage:function(url){
             var self = this,
-                cacheDiv = $('[data-cache="'+url+'"]');
-            if(cacheDiv.size()){
-                $('#' + self.options.contentId).removeAttr('id').hide();
-                $('title').text(cacheDiv.attr('data-title'));
-                cacheDiv.attr('id',self.options.contentId).show();
-                var f = cacheDiv.data('fjax');
-                if(f){
-                    if($.isFunction(f.initFunc)){
-                        f.initFunc();
+                $oldContainer,
+                settings,
+                $cacheDiv = $('[data-cache="'+url+'"]');
+            if($cacheDiv.size()){
+                $oldContainer = $('#' + self.options.contentId).removeAttr('id');
+                if($.isFunction(afterClose)){
+                    if(afterClose($oldContainer,self) === false){
+                        afterClose = false;
+                        return true;
                     }
-                    if($.isFunction(f.readyFunc)){
-                        f.readyFunc();
+                    afterClose = false;
+                }
+
+                settings = $cacheDiv.data('fjax');
+
+                $('title').text(settings.title);
+                $cacheDiv.attr('id',self.options.contentId);
+                self.trigger('fjax.changeCachePage',[$cacheDiv,$oldContainer,settings.data,self]);
+
+                if(settings){
+                    if($.isFunction(settings.initFunc)){
+                        settings.initFunc();
+                    }
+                    if($.isFunction(settings.readyFunc)){
+                        settings.readyFunc();
+                    }
+                    if($.isFunction(settings.afterCloseFunc)){
+                        afterClose = settings.afterCloseFunc;
                     }
                 }
                 return true;
@@ -225,6 +275,7 @@
         data: {},
         jsCache: {},
         cssCache: {},
+        eventsList: {},
         currentUrl: ''
     };
     var getScripts = function( resources, callback ) {
