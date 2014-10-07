@@ -18,6 +18,11 @@ use yii\web\AssetBundle;
 use yii\web\JsExpression;
 use yii\web\Response;
 
+/**
+ *
+ * @author Pavels Radajevs <pavlinter@gmail.com>
+ * @last-commit e7de579ee6963a0671a4f50ab7b20c821d2faad5
+ */
 class View extends \yii\web\View
 {
     /**
@@ -100,7 +105,7 @@ class View extends \yii\web\View
                 'currentUrl' => Url::to(),
             ],$this->clientOptions);
 
-            $this->registerJsFile($webAssets.'/js/jquery.fjax.js',[JqueryAsset::className()]);
+            $this->registerJsFile($webAssets.'/js/jquery.fjax.js',['depends' => JqueryAsset::className()]);
             $script = '';
             foreach ($this->clientEvents as $event => $handler) {
                 $script .= '$(document).on("' . $event . '" ,' . new JsExpression($handler) . ');';
@@ -148,11 +153,13 @@ class View extends \yii\web\View
         }
 
     }
-    public function registerCssFile($url, $depends = [], $options = [], $key = null)
+    public function registerCssFile($url, $options = [], $key = null)
     {
         $url = Yii::getAlias($url);
         $key = $key ?: $url;
+        $depends = ArrayHelper::remove($options, 'depends', []);
         $this->cssCache[$url] = true;
+
         if (empty($depends)) {
             if($this->isAjax()) {
                 $this->cssFiles[$key] = $url;
@@ -160,11 +167,11 @@ class View extends \yii\web\View
                 $this->cssFiles[$key] = Html::cssFile($url, $options);
             }
         } else {
-            $am = Yii::$app->getAssetManager();
-            $am->bundles[$key] = new AssetBundle([
-                'css' => [$url],
+            $this->getAssetManager()->bundles[$key] = new AssetBundle([
+                'baseUrl' => '',
+                'css' => [strncmp($url, '//', 2) === 0 ? $url : ltrim($url, '/')],
                 'cssOptions' => $options,
-                'depends' => (array)$depends,
+                'depends' => (array) $depends,
             ]);
             $this->registerAssetBundle($key);
         }
@@ -221,33 +228,33 @@ class View extends \yii\web\View
             JqueryAsset::register($this);
         }
     }
-    public function registerJsFile($url, $depends = [], $options = [], $key = null)
-    {
 
+
+    public function registerJsFile($url, $options = [], $key = null)
+    {
         $url = Yii::getAlias($url);
         $key = $key ?: $url;
+        $depends = ArrayHelper::remove($options, 'depends', []);
         $this->jsCache[$url] = true;
+
         if (empty($depends)) {
-            $position = isset($options['position']) ? $options['position'] : self::POS_END;
-            unset($options['position']);
+            $position = ArrayHelper::remove($options, 'position', self::POS_END);
             if($this->isAjax()){
                 $this->jsFiles[$position][$key] = $url;
             } else {
                 $this->jsFiles[$position][$key] = Html::jsFile($url, $options);
             }
         } else {
-            $am = Yii::$app->getAssetManager();
-            if (strpos($url, '/') !== 0 && strpos($url, '://') === false) {
-                $url = Yii::$app->getRequest()->getBaseUrl() . '/' . $url;
-            }
-            $am->bundles[$key] = new AssetBundle([
-                'js' => [$url],
+            $this->getAssetManager()->bundles[$key] = new AssetBundle([
+                'baseUrl' => '',
+                'js' => [strncmp($url, '//', 2) === 0 ? $url : ltrim($url, '/')],
                 'jsOptions' => $options,
-                'depends' => (array)$depends,
+                'depends' => (array) $depends,
             ]);
             $this->registerAssetBundle($key);
         }
     }
+
     public function isAjax()
     {
         return Yii::$app->getRequest()->getHeaders()->get('X-Fjax');;
